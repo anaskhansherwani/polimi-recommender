@@ -30,8 +30,8 @@ num_recommendations = 5
 file = open("../resources/results.csv", "w")
 file.write("UserId,RecommendedItemIds\n")
 for user in test_data.collect():
-    recommendations = user + "," + " " \
-        .join(map(str, (i.product for i in model \
+    recommendations = user + "," + " "\
+        .join(map(str, (i.product for i in model\
         .recommendProducts(int(user), num_recommendations))))
     file.write(recommendations + "\n")
 file.close()
