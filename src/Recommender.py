@@ -2,6 +2,11 @@ from pyspark import SparkContext
 from pyspark.mllib.recommendation import ALS, Rating
 import shutil
 
+def global_average(ratings):
+    ga = ratings.map(lambda x: float(x[2])).mean()
+    print("The global average is {}".format(ga))
+    return ga
+    
 def test_model(sc, model):
     # Load and parse the data
     num_partitions = 10
@@ -27,7 +32,7 @@ def test_model(sc, model):
 def evaluate_model(training, test, model):
     # Recommendation parameters
     num_recommendations = 5
-    filter_criteria = 5
+    filter_criteria = global_average(training)
     
     # Open files to output data
     input_file = open("../resources/input.csv", "w")
@@ -55,9 +60,9 @@ def evaluate_model(training, test, model):
     
 def train_model(training):
     # Build the recommendation model using Alternating Least Squares
-    rank = 10
+    rank = 50
     num_iterations = 10
-    model = ALS.train(training, rank, num_iterations)
+    model = ALS.train(training, rank, num_iterations, lambda_ = 0.001)
     
     # Evaluate the model on training data
     evaluation_data = training.map(lambda p: (p[0], p[1]))
@@ -67,6 +72,38 @@ def train_model(training):
     print("Mean Squared Error = " + str(MSE))
     
     return model
+
+def unbiased_ratings(ratings):
+    ga = global_average(ratings)
+    ratings_unbiased = ratings.map(lambda x: (x[0], x[1], float(x[2]) - ga))
+    return ratings_unbiased
+    
+def item_bias(ratings_unbiased):
+    c = 10
+    sum_and_count = ratings_unbiased.map(lambda x: (x[1], float(x[2]))).\
+        aggregateByKey((0, 0), lambda x, y: (x[0] + y, x[1] + 1),
+                          lambda x, y: (x[0] + y[0], x[1] + y[1]))
+    item_bias = sum_and_count.mapValues(lambda x: x[0] / (x[1] + c))
+    return item_bias
+    
+def user_bias(ratings_unbiased):
+    c = 10
+    sum_and_count = ratings_unbiased.map(lambda x: (x[0], float(x[2]))).\
+        aggregateByKey((0, 0), lambda x, y: (x[0] + y, x[1] + 1),
+                          lambda x, y: (x[0] + y[0], x[1] + y[1]))
+    user_bias = sum_and_count.mapValues(lambda x: x[0] / (x[1] + c))
+    return user_bias
+    
+def global_effects(ratings):
+    ratings_unbiased = unbiased_ratings(ratings)
+    i_bias = item_bias(ratings_unbiased).collectAsMap()
+    u_bias = user_bias(ratings_unbiased).collectAsMap()
+    ga = global_average(ratings)
+    
+    ratings = ratings.map(lambda l: Rating(l[0], l[1], ga + i_bias[l[1]] + u_bias[l[0]]))
+    
+    return ratings
+    
     
 def main():
     # Create a SparkContext
@@ -78,7 +115,8 @@ def main():
     
     # Convert training data into Ratings RDD
     ratings = train_data.map(lambda l: l.split(','))\
-        .map(lambda l: Rating(int(l[0]), int(l[1]), int(l[2])))
+        .map(lambda l: Rating(int(l[0]), int(l[1]), float(l[2])))
+    ratings = global_effects(ratings)
     training = ratings
 #     (training, test) = ratings.randomSplit([0.8, 0.2])
     
@@ -92,8 +130,8 @@ def main():
     test_model(sc, model)
     
     # Save the model
-    shutil.rmtree('../resources/myCollaborativeFilter')
-    model.save(sc, "../resources/myCollaborativeFilter")
+#     shutil.rmtree('../resources/myCollaborativeFilter')
+#     model.save(sc, "../resources/myCollaborativeFilter")
 
 if __name__ == '__main__':
     main()
